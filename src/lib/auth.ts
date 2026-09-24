@@ -4,6 +4,8 @@ import { compare } from "bcryptjs"
 import prisma from "@/lib/db"
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  trustHost: true,
+  secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || "chivon-crm-super-secure-production-secret-key-32chars",
   providers: [
     Credentials({
       name: "Credentials",
