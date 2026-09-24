@@ -1,0 +1,1160 @@
+// Chivon CRM - Complete Prisma Schema
+// This file defines the entire database structure
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// IDENTITY & ACCESS
+// ============================================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  firstName     String    @map("first_name")
+  lastName      String    @map("last_name")
+  phone         String?
+  avatarUrl     String?   @map("avatar_url")
+  departmentId  String?   @map("department_id")
+  isActive      Boolean   @default(true) @map("is_active")
+  lastLoginAt   DateTime? @map("last_login_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  department    Department?   @relation(fields: [departmentId], references: [id])
+  userRoles     UserRole[]
+  
+  // Ownership relations
+  ownedCompanies    Company[]         @relation("CompanyOwner")
+  assignedInquiries Inquiry[]         @relation("InquirySalesperson")
+  technicalInquiries Inquiry[]        @relation("InquiryTechnical")
+  ownedOpportunities Opportunity[]    @relation("OpportunityOwner")
+  activities        Activity[]
+  followUps         FollowUp[]        @relation("FollowUpOwner")
+  siteVisitEngineers SiteVisitEngineer[]
+  quotationCreators  QuotationVersion[] @relation("QuotationCreator")
+  quotationApprovers QuotationApproval[] @relation("ApprovalApprover")
+  projectManagers   Project[]          @relation("ProjectManager")
+  taskAssignees     ProjectTask[]      @relation("TaskAssignee")
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  purchaseRequesters PurchaseRequest[] @relation("PurchaseRequester")
+  
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  slug        String   @unique
+  description String?
+  dataScope   String   @default("own") @map("data_scope") // own, team, department, all
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id       String @id @default(cuid())
+  resource String
+  action   String
+  slug     String @unique // e.g., "customers.view"
+
+  rolePermissions RolePermission[]
+
+  @@unique([resource, action])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @map("role_id")
+  permissionId String @map("permission_id")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId String @map("user_id")
+  roleId String @map("role_id")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+// ============================================================
+// ORGANIZATION
+// ============================================================
+
+model Department {
+  id        String  @id @default(cuid())
+  name      String  @unique
+  code      String?
+  managerId String? @map("manager_id")
+  isActive  Boolean @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  users     User[]
+  services  Service[]
+  inquiries Inquiry[]
+
+  @@map("departments")
+}
+
+model ServiceCategory {
+  id       String  @id @default(cuid())
+  name     String  @unique
+  isActive Boolean @default(true) @map("is_active")
+
+  services Service[]
+
+  @@map("service_categories")
+}
+
+model Service {
+  id           String  @id @default(cuid())
+  name         String
+  categoryId   String? @map("category_id")
+  departmentId String? @map("department_id")
+  description  String?
+  isActive     Boolean @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  category   ServiceCategory? @relation(fields: [categoryId], references: [id])
+  department Department?      @relation(fields: [departmentId], references: [id])
+  inquiries  Inquiry[]
+
+  @@map("services")
+}
+
+model TaxRate {
+  id        String  @id @default(cuid())
+  name      String
+  rate      Float // SQLite doesn't have DECIMAL, use Float with server-side precision
+  type      String  @default("both") // sales, purchase, both
+  isDefault Boolean @default(false) @map("is_default")
+  isActive  Boolean @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("tax_rates")
+}
+
+model NumberingFormat {
+  id       String @id @default(cuid())
+  entity   String @unique // company, contact, inquiry, etc.
+  prefix   String // CHV-CMP, CHV-CON, etc.
+  nextNum  Int    @default(1) @map("next_num")
+  padding  Int    @default(5)
+
+  @@map("numbering_formats")
+}
+
+// ============================================================
+// CRM — COMPANIES & CONTACTS
+// ============================================================
+
+model Company {
+  id         String  @id @default(cuid())
+  businessId String  @unique @map("business_id")
+  name       String
+  industry   String?
+  website    String?
+  email      String?
+  phone      String?
+  address    String?
+  city       String?
+  state      String?
+  country    String?
+  postalCode String? @map("postal_code")
+  notes      String?
+  ownerId    String? @map("owner_id")
+  isActive   Boolean @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  owner        User?          @relation("CompanyOwner", fields: [ownerId], references: [id])
+  contacts     Contact[]
+  inquiries    Inquiry[]
+  opportunities Opportunity[]
+  activities   Activity[]
+  followUps    FollowUp[]
+  siteVisits   SiteVisit[]
+  quotations   Quotation[]
+  purchaseOrders PurchaseOrder[]
+  projects     Project[]
+  invoices     FinanceInvoice[]
+  payments     FinancePayment[]
+  documents    Document[]
+  afterSalesRequests AfterSalesRequest[]
+
+  @@index([name])
+  @@index([businessId])
+  @@map("companies")
+}
+
+model Contact {
+  id              String  @id @default(cuid())
+  businessId      String  @unique @map("business_id")
+  companyId       String  @map("company_id")
+  firstName       String  @map("first_name")
+  lastName        String  @map("last_name")
+  email           String?
+  phone           String?
+  mobile          String?
+  designation     String?
+  department      String?
+  isPrimary       Boolean @default(false) @map("is_primary")
+  isDecisionMaker Boolean @default(false) @map("is_decision_maker")
+  notes           String?
+  isActive        Boolean @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  company      Company       @relation(fields: [companyId], references: [id])
+  inquiries    Inquiry[]
+  opportunities Opportunity[]
+  activities   Activity[]
+  followUps    FollowUp[]
+  quotations   Quotation[]
+
+  @@index([companyId])
+  @@index([businessId])
+  @@map("contacts")
+}
+
+// ============================================================
+// CRM — INQUIRIES & OPPORTUNITIES
+// ============================================================
+
+model Inquiry {
+  id               String   @id @default(cuid())
+  businessId       String   @unique @map("business_id")
+  companyId        String   @map("company_id")
+  contactId        String?  @map("contact_id")
+  serviceId        String?  @map("service_id")
+  discipline       String?
+  scope            String?
+  location         String?
+  estimatedValue   Float?   @map("estimated_value")
+  priority         String   @default("medium") // low, medium, high, urgent
+  source           String   @default("other") // website, email, whatsapp, phone, linkedin, referral, exhibition, tender, existing_customer, cold_outreach, other
+  departmentId     String?  @map("department_id")
+  salespersonId    String?  @map("salesperson_id")
+  technicalOwnerId String?  @map("technical_owner_id")
+  status           String   @default("new") // new, in_review, qualified, converted, lost, closed
+  idempotencyKey   String?  @unique @map("idempotency_key")
+  
+  // Qualification fields
+  customerNeed     String?  @map("customer_need")
+  budget           String?
+  timeline         String?
+  decisionMaker    String?  @map("decision_maker")
+  currentVendor    String?  @map("current_vendor")
+  competitor       String?
+  urgency          String?
+  technicalReq     String?  @map("technical_req")
+  
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  company       Company      @relation(fields: [companyId], references: [id])
+  contact       Contact?     @relation(fields: [contactId], references: [id])
+  service       Service?     @relation(fields: [serviceId], references: [id])
+  department    Department?  @relation(fields: [departmentId], references: [id])
+  salesperson   User?        @relation("InquirySalesperson", fields: [salespersonId], references: [id])
+  technicalOwner User?       @relation("InquiryTechnical", fields: [technicalOwnerId], references: [id])
+  opportunity   Opportunity?
+  activities    Activity[]
+  documents     Document[]
+
+  @@index([companyId])
+  @@index([status])
+  @@index([businessId])
+  @@map("inquiries")
+}
+
+model Opportunity {
+  id                String   @id @default(cuid())
+  businessId        String   @unique @map("business_id")
+  inquiryId         String?  @unique @map("inquiry_id")
+  companyId         String   @map("company_id")
+  contactId         String?  @map("contact_id")
+  title             String
+  estimatedValue    Float?   @map("estimated_value")
+  stage             String   @default("qualified") // qualified, technical, site_visit, quotation, negotiation, awaiting_po, won, lost
+  probability       Int      @default(10) // 0-100
+  expectedCloseDate DateTime? @map("expected_close_date")
+  ownerId           String?  @map("owner_id")
+  lostReason        String?  @map("lost_reason")
+  notes             String?
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  inquiry            Inquiry?           @relation(fields: [inquiryId], references: [id])
+  company            Company            @relation(fields: [companyId], references: [id])
+  contact            Contact?           @relation(fields: [contactId], references: [id])
+  owner              User?              @relation("OpportunityOwner", fields: [ownerId], references: [id])
+  technicalRequirements TechnicalRequirement[]
+  siteVisits         SiteVisit[]
+  boqs               BOQ[]
+  quotations         Quotation[]
+  activities         Activity[]
+  followUps          FollowUp[]
+  negotiations       Negotiation[]
+  documents          Document[]
+
+  @@index([companyId])
+  @@index([stage])
+  @@index([businessId])
+  @@map("opportunities")
+}
+
+// ============================================================
+// CRM — ACTIVITIES & FOLLOW-UPS
+// ============================================================
+
+model Activity {
+  id            String    @id @default(cuid())
+  type          String    // call, meeting, email, whatsapp, note
+  subject       String
+  description   String?
+  companyId     String?   @map("company_id")
+  contactId     String?   @map("contact_id")
+  opportunityId String?   @map("opportunity_id")
+  inquiryId     String?   @map("inquiry_id")
+  projectId     String?   @map("project_id")
+  userId        String    @map("user_id")
+  dueDate       DateTime? @map("due_date")
+  completedAt   DateTime? @map("completed_at")
+  priority      String    @default("medium")
+  status        String    @default("pending") // pending, completed, cancelled
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  user        User         @relation(fields: [userId], references: [id])
+  company     Company?     @relation(fields: [companyId], references: [id])
+  contact     Contact?     @relation(fields: [contactId], references: [id])
+  opportunity Opportunity? @relation(fields: [opportunityId], references: [id])
+  inquiry     Inquiry?     @relation(fields: [inquiryId], references: [id])
+  project     Project?     @relation(fields: [projectId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("activities")
+}
+
+model FollowUp {
+  id            String    @id @default(cuid())
+  companyId     String?   @map("company_id")
+  contactId     String?   @map("contact_id")
+  opportunityId String?   @map("opportunity_id")
+  action        String
+  ownerId       String    @map("owner_id")
+  dueDate       DateTime  @map("due_date")
+  priority      String    @default("medium") // low, medium, high, urgent
+  status        String    @default("pending") // pending, completed, overdue, cancelled
+  notes         String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  completedAt   DateTime? @map("completed_at")
+
+  company     Company?     @relation(fields: [companyId], references: [id])
+  contact     Contact?     @relation(fields: [contactId], references: [id])
+  opportunity Opportunity? @relation(fields: [opportunityId], references: [id])
+  owner       User         @relation("FollowUpOwner", fields: [ownerId], references: [id])
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("follow_ups")
+}
+
+// ============================================================
+// TECHNICAL
+// ============================================================
+
+model TechnicalRequirement {
+  id            String  @id @default(cuid())
+  opportunityId String  @map("opportunity_id")
+  serviceType   String  @map("service_type") // plc_automation, fabrication, cnc, etc.
+  templateData  String  @map("template_data") // JSON string for dynamic fields
+  engineerId    String? @map("engineer_id")
+  status        String  @default("pending") // pending, in_progress, completed, cancelled
+  notes         String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id])
+
+  @@index([opportunityId])
+  @@map("technical_requirements")
+}
+
+model TechnicalTemplate {
+  id          String @id @default(cuid())
+  serviceType String @unique @map("service_type")
+  name        String
+  fields      String // JSON array of field definitions
+  isActive    Boolean @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("technical_templates")
+}
+
+model SiteVisit {
+  id            String   @id @default(cuid())
+  opportunityId String?  @map("opportunity_id")
+  companyId     String   @map("company_id")
+  location      String
+  visitDate     DateTime @map("visit_date")
+  purpose       String
+  checklist     String?  // JSON
+  outcome       String?
+  nextAction    String?  @map("next_action")
+  status        String   @default("scheduled") // scheduled, completed, cancelled
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  opportunity Opportunity?      @relation(fields: [opportunityId], references: [id])
+  company     Company           @relation(fields: [companyId], references: [id])
+  engineers   SiteVisitEngineer[]
+  documents   Document[]
+
+  @@index([opportunityId])
+  @@index([visitDate])
+  @@map("site_visits")
+}
+
+model SiteVisitEngineer {
+  siteVisitId String @map("site_visit_id")
+  userId      String @map("user_id")
+
+  siteVisit SiteVisit @relation(fields: [siteVisitId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@id([siteVisitId, userId])
+  @@map("site_visit_engineers")
+}
+
+model BOQ {
+  id            String  @id @default(cuid())
+  businessId    String  @unique @map("business_id")
+  opportunityId String  @map("opportunity_id")
+  title         String
+  status        String  @default("draft") // draft, review, approved, superseded
+  totalCost     Float   @default(0) @map("total_cost")
+  totalSelling  Float   @default(0) @map("total_selling")
+  notes         String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id])
+  sections    BOQSection[]
+
+  @@index([opportunityId])
+  @@map("boqs")
+}
+
+model BOQSection {
+  id      String @id @default(cuid())
+  boqId   String @map("boq_id")
+  title   String
+  sortOrder Int  @default(0) @map("sort_order")
+
+  boq   BOQ       @relation(fields: [boqId], references: [id], onDelete: Cascade)
+  items BOQItem[]
+
+  @@index([boqId])
+  @@map("boq_sections")
+}
+
+model BOQItem {
+  id            String  @id @default(cuid())
+  sectionId     String  @map("section_id")
+  description   String
+  specification String?
+  quantity      Float   @default(1)
+  unit          String  @default("nos")
+  costPrice     Float   @default(0) @map("cost_price")
+  sellingPrice  Float   @default(0) @map("selling_price")
+  notes         String?
+  sortOrder     Int     @default(0) @map("sort_order")
+
+  section BOQSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+
+  @@index([sectionId])
+  @@map("boq_items")
+}
+
+// ============================================================
+// COMMERCIAL — QUOTATIONS
+// ============================================================
+
+model Quotation {
+  id            String  @id @default(cuid())
+  businessId    String  @unique @map("business_id")
+  companyId     String  @map("company_id")
+  contactId     String? @map("contact_id")
+  opportunityId String? @map("opportunity_id")
+  currency      String  @default("AED")
+  validityDays  Int     @default(30) @map("validity_days")
+  paymentTerms  String? @map("payment_terms")
+  deliveryTerms String? @map("delivery_terms")
+  status        String  @default("draft") // draft, pending_approval, approved, rejected, sent, accepted, expired, cancelled
+  currentRevision Int   @default(0) @map("current_revision")
+  notes         String?
+  termsAndConditions String? @map("terms_and_conditions")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  company       Company           @relation(fields: [companyId], references: [id])
+  contact       Contact?          @relation(fields: [contactId], references: [id])
+  opportunity   Opportunity?      @relation(fields: [opportunityId], references: [id])
+  versions      QuotationVersion[]
+  approvals     QuotationApproval[]
+  purchaseOrder PurchaseOrder?
+  negotiations  Negotiation[]
+
+  @@index([companyId])
+  @@index([status])
+  @@index([businessId])
+  @@map("quotations")
+}
+
+model QuotationVersion {
+  id              String   @id @default(cuid())
+  quotationId     String   @map("quotation_id")
+  revision        Int
+  subtotal        Float    @default(0)
+  discountAmount  Float    @default(0) @map("discount_amount")
+  discountPercent Float    @default(0) @map("discount_percent")
+  taxAmount       Float    @default(0) @map("tax_amount")
+  grandTotal      Float    @default(0) @map("grand_total")
+  changeReason    String?  @map("change_reason")
+  createdById     String   @map("created_by_id")
+  isCurrent       Boolean  @default(true) @map("is_current")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  quotation Quotation      @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  createdBy User           @relation("QuotationCreator", fields: [createdById], references: [id])
+  items     QuotationItem[]
+
+  @@unique([quotationId, revision])
+  @@index([quotationId])
+  @@map("quotation_versions")
+}
+
+model QuotationItem {
+  id          String @id @default(cuid())
+  versionId   String @map("version_id")
+  description String
+  quantity    Float  @default(1)
+  unit        String @default("nos")
+  unitPrice   Float  @default(0) @map("unit_price")
+  discount    Float  @default(0)
+  taxRate     Float  @default(0) @map("tax_rate")
+  total       Float  @default(0)
+  notes       String?
+  sortOrder   Int    @default(0) @map("sort_order")
+
+  version QuotationVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@index([versionId])
+  @@map("quotation_items")
+}
+
+model QuotationApproval {
+  id           String   @id @default(cuid())
+  quotationId  String   @map("quotation_id")
+  approverId   String   @map("approver_id")
+  status       String   @default("pending") // pending, approved, rejected
+  comments     String?
+  respondedAt  DateTime? @map("responded_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  quotation Quotation @relation(fields: [quotationId], references: [id])
+  approver  User      @relation("ApprovalApprover", fields: [approverId], references: [id])
+
+  @@index([quotationId])
+  @@map("quotation_approvals")
+}
+
+model Negotiation {
+  id            String  @id @default(cuid())
+  quotationId   String  @map("quotation_id")
+  opportunityId String? @map("opportunity_id")
+  priceChange   String? @map("price_change")
+  discountReq   String? @map("discount_req")
+  paymentTerms  String? @map("payment_terms")
+  deliveryTerms String? @map("delivery_terms")
+  scopeChange   String? @map("scope_change")
+  competitor    String?
+  customerRequest String? @map("customer_request")
+  internalNotes String?  @map("internal_notes")
+  status        String  @default("open") // open, resolved, lost
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  quotation   Quotation    @relation(fields: [quotationId], references: [id])
+  opportunity Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  @@index([quotationId])
+  @@map("negotiations")
+}
+
+model PurchaseOrder {
+  id           String   @id @default(cuid())
+  businessId   String   @unique @map("business_id")
+  companyId    String   @map("company_id")
+  quotationId  String?  @unique @map("quotation_id")
+  poNumber     String   @map("po_number")
+  poValue      Float    @map("po_value")
+  poDate       DateTime @map("po_date")
+  status       String   @default("received") // received, acknowledged, in_progress, completed, cancelled
+  notes        String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  company   Company    @relation(fields: [companyId], references: [id])
+  quotation Quotation? @relation(fields: [quotationId], references: [id])
+  project   Project?
+  documents Document[]
+
+  @@index([companyId])
+  @@index([businessId])
+  @@map("purchase_orders")
+}
+
+// ============================================================
+// PROJECTS
+// ============================================================
+
+model Project {
+  id              String    @id @default(cuid())
+  businessId      String    @unique @map("business_id")
+  purchaseOrderId String?   @unique @map("purchase_order_id")
+  companyId       String    @map("company_id")
+  title           String
+  description     String?
+  managerId       String?   @map("manager_id")
+  contractValue   Float     @default(0) @map("contract_value")
+  stage           String    @default("po_received") // po_received, kickoff, engineering, procurement, fabrication, installation, programming, testing, commissioning, handover, completed
+  priority        String    @default("medium")
+  startDate       DateTime? @map("start_date")
+  endDate         DateTime? @map("end_date")
+  actualEndDate   DateTime? @map("actual_end_date")
+  status          String    @default("active") // active, on_hold, delayed, completed, cancelled
+  notes           String?
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  purchaseOrder PurchaseOrder?  @relation(fields: [purchaseOrderId], references: [id])
+  company       Company         @relation(fields: [companyId], references: [id])
+  manager       User?           @relation("ProjectManager", fields: [managerId], references: [id])
+  tasks         ProjectTask[]
+  milestones    ProjectMilestone[]
+  activities    Activity[]
+  invoices      FinanceInvoice[]
+  expenses      FinanceExpense[]
+  documents     Document[]
+  purchaseRequests PurchaseRequest[]
+  afterSalesRequests AfterSalesRequest[]
+
+  @@index([companyId])
+  @@index([status])
+  @@index([businessId])
+  @@map("projects")
+}
+
+model ProjectTask {
+  id           String    @id @default(cuid())
+  projectId    String    @map("project_id")
+  title        String
+  description  String?
+  assigneeId   String?   @map("assignee_id")
+  department   String?
+  priority     String    @default("medium") // low, medium, high, urgent
+  startDate    DateTime? @map("start_date")
+  dueDate      DateTime? @map("due_date")
+  status       String    @default("todo") // todo, in_progress, blocked, done
+  dependencyId String?   @map("dependency_id")
+  sortOrder    Int       @default(0) @map("sort_order")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  project    Project      @relation(fields: [projectId], references: [id])
+  assignee   User?        @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  dependency ProjectTask? @relation("TaskDependency", fields: [dependencyId], references: [id])
+  dependents ProjectTask[] @relation("TaskDependency")
+
+  @@index([projectId])
+  @@index([assigneeId])
+  @@map("project_tasks")
+}
+
+model ProjectMilestone {
+  id          String    @id @default(cuid())
+  projectId   String    @map("project_id")
+  title       String
+  description String?
+  dueDate     DateTime? @map("due_date")
+  completedAt DateTime? @map("completed_at")
+  status      String    @default("pending") // pending, completed, overdue
+  sortOrder   Int       @default(0) @map("sort_order")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@index([projectId])
+  @@map("project_milestones")
+}
+
+// ============================================================
+// PROCUREMENT
+// ============================================================
+
+model Vendor {
+  id           String  @id @default(cuid())
+  businessId   String  @unique @map("business_id")
+  name         String
+  contactName  String? @map("contact_name")
+  email        String?
+  phone        String?
+  address      String?
+  city         String?
+  country      String?
+  products     String? // JSON or comma-separated
+  paymentTerms String? @map("payment_terms")
+  leadTime     String? @map("lead_time")
+  notes        String?
+  isActive     Boolean @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  bills       FinanceBill[]
+  documents   Document[]
+
+  @@index([businessId])
+  @@map("vendors")
+}
+
+model PurchaseRequest {
+  id           String   @id @default(cuid())
+  projectId    String?  @map("project_id")
+  requesterId  String   @map("requester_id")
+  department   String?
+  requiredDate DateTime? @map("required_date")
+  status       String   @default("pending") // pending, approved, rejected, ordered, received
+  notes        String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  project   Project? @relation(fields: [projectId], references: [id])
+  requester User     @relation("PurchaseRequester", fields: [requesterId], references: [id])
+  items     PurchaseRequestItem[]
+
+  @@index([projectId])
+  @@map("purchase_requests")
+}
+
+model PurchaseRequestItem {
+  id                String  @id @default(cuid())
+  purchaseRequestId String  @map("purchase_request_id")
+  description       String
+  specification     String?
+  quantity          Float   @default(1)
+  unit              String  @default("nos")
+  preferredVendor   String? @map("preferred_vendor")
+  estimatedCost     Float?  @map("estimated_cost")
+  sortOrder         Int     @default(0) @map("sort_order")
+
+  purchaseRequest PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseRequestId])
+  @@map("purchase_request_items")
+}
+
+// ============================================================
+// ACCOUNTING / FINANCE
+// ============================================================
+
+model FinanceInvoice {
+  id              String    @id @default(cuid())
+  businessId      String    @unique @map("business_id")
+  companyId       String    @map("company_id")
+  projectId       String?   @map("project_id")
+  invoiceNumber   String    @unique @map("invoice_number")
+  invoiceDate     DateTime  @map("invoice_date")
+  dueDate         DateTime  @map("due_date")
+  subtotal        Float     @default(0)
+  taxAmount       Float     @default(0) @map("tax_amount")
+  total           Float     @default(0)
+  paidAmount      Float     @default(0) @map("paid_amount")
+  outstanding     Float     @default(0)
+  status          String    @default("draft") // draft, sent, partially_paid, paid, overdue, cancelled
+  notes           String?
+  externalId      String?   @map("external_id") // Accounting system ID
+  syncStatus      String    @default("local") @map("sync_status") // local, synced, error
+  lastSyncAt      DateTime? @map("last_sync_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  company  Company          @relation(fields: [companyId], references: [id])
+  project  Project?         @relation(fields: [projectId], references: [id])
+  items    FinanceInvoiceItem[]
+  payments FinancePayment[]
+  documents Document[]
+
+  @@index([companyId])
+  @@index([status])
+  @@index([businessId])
+  @@map("finance_invoices")
+}
+
+model FinanceInvoiceItem {
+  id          String @id @default(cuid())
+  invoiceId   String @map("invoice_id")
+  description String
+  quantity    Float  @default(1)
+  unitPrice   Float  @default(0) @map("unit_price")
+  taxRate     Float  @default(0) @map("tax_rate")
+  total       Float  @default(0)
+  sortOrder   Int    @default(0) @map("sort_order")
+
+  invoice FinanceInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("finance_invoice_items")
+}
+
+model FinancePayment {
+  id            String   @id @default(cuid())
+  businessId    String   @unique @map("business_id")
+  companyId     String   @map("company_id")
+  invoiceId     String?  @map("invoice_id")
+  amount        Float
+  paymentDate   DateTime @map("payment_date")
+  paymentMethod String   @default("bank_transfer") @map("payment_method") // bank_transfer, cheque, cash, card, online
+  reference     String?
+  notes         String?
+  status        String   @default("completed") // pending, completed, failed, reversed
+  externalId    String?  @map("external_id")
+  syncStatus    String   @default("local") @map("sync_status")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  company Company         @relation(fields: [companyId], references: [id])
+  invoice FinanceInvoice?  @relation(fields: [invoiceId], references: [id])
+
+  @@index([companyId])
+  @@index([invoiceId])
+  @@index([businessId])
+  @@map("finance_payments")
+}
+
+model FinanceExpense {
+  id          String   @id @default(cuid())
+  businessId  String   @unique @map("business_id")
+  date        DateTime
+  category    String
+  projectId   String?  @map("project_id")
+  employeeName String? @map("employee_name")
+  vendorName  String?  @map("vendor_name")
+  amount      Float
+  taxAmount   Float    @default(0) @map("tax_amount")
+  description String?
+  receiptUrl  String?  @map("receipt_url")
+  status      String   @default("pending") // pending, approved, rejected, reimbursed
+  externalId  String?  @map("external_id")
+  syncStatus  String   @default("local") @map("sync_status")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  project Project? @relation(fields: [projectId], references: [id])
+
+  @@index([projectId])
+  @@index([businessId])
+  @@map("finance_expenses")
+}
+
+model FinanceBill {
+  id           String   @id @default(cuid())
+  businessId   String   @unique @map("business_id")
+  vendorId     String   @map("vendor_id")
+  billNumber   String   @map("bill_number")
+  billDate     DateTime @map("bill_date")
+  dueDate      DateTime @map("due_date")
+  amount       Float
+  paidAmount   Float    @default(0) @map("paid_amount")
+  outstanding  Float    @default(0)
+  status       String   @default("pending") // pending, partially_paid, paid, overdue, cancelled
+  notes        String?
+  externalId   String?  @map("external_id")
+  syncStatus   String   @default("local") @map("sync_status")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([vendorId])
+  @@index([businessId])
+  @@map("finance_bills")
+}
+
+model BankAccount {
+  id           String  @id @default(cuid())
+  name         String
+  bankName     String  @map("bank_name")
+  accountNumber String @map("account_number")
+  currency     String  @default("AED")
+  balance      Float   @default(0)
+  isActive     Boolean @default(true) @map("is_active")
+  externalId   String? @map("external_id")
+  syncStatus   String  @default("not_connected") @map("sync_status")
+  lastSyncAt   DateTime? @map("last_sync_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("bank_accounts")
+}
+
+// ============================================================
+// ACCOUNTING INTEGRATION
+// ============================================================
+
+model AccountingConnection {
+  id             String    @id @default(cuid())
+  provider       String    // quickbooks, zoho, xero
+  organizationId String?   @map("organization_id")
+  organizationName String? @map("organization_name")
+  status         String    @default("disconnected") // disconnected, connected, error
+  accessToken    String?   @map("access_token")
+  refreshToken   String?   @map("refresh_token")
+  tokenExpiresAt DateTime? @map("token_expires_at")
+  lastSyncAt     DateTime? @map("last_sync_at")
+  settings       String?   // JSON config
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  syncJobs SyncJob[]
+
+  @@map("accounting_connections")
+}
+
+model AccountingMapping {
+  id           String @id @default(cuid())
+  entityType   String @map("entity_type") // customer, invoice, payment, etc.
+  localId      String @map("local_id")
+  externalId   String @map("external_id")
+  provider     String
+  lastSyncAt   DateTime? @map("last_sync_at")
+  syncStatus   String    @default("synced") @map("sync_status")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@unique([entityType, localId, provider])
+  @@unique([entityType, externalId, provider])
+  @@map("accounting_mappings")
+}
+
+model SyncJob {
+  id           String    @id @default(cuid())
+  connectionId String    @map("connection_id")
+  entityType   String    @map("entity_type")
+  direction    String    @default("push") // push, pull
+  status       String    @default("pending") // pending, running, completed, failed
+  totalRecords Int       @default(0) @map("total_records")
+  syncedRecords Int      @default(0) @map("synced_records")
+  failedRecords Int      @default(0) @map("failed_records")
+  errorLog     String?   @map("error_log")
+  startedAt    DateTime? @map("started_at")
+  completedAt  DateTime? @map("completed_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  connection AccountingConnection @relation(fields: [connectionId], references: [id])
+
+  @@index([connectionId])
+  @@map("sync_jobs")
+}
+
+// ============================================================
+// DOCUMENTS
+// ============================================================
+
+model Document {
+  id           String  @id @default(cuid())
+  fileName     String  @map("file_name")
+  fileType     String  @map("file_type") // mime type
+  fileSize     Int     @map("file_size")
+  filePath     String  @map("file_path")
+  category     String  // rfq, drawing, technical_spec, boq, quotation, po, contract, site_photo, report, invoice, completion
+  version      Int     @default(1)
+  notes        String?
+  uploaderId   String  @map("uploader_id")
+  
+  // Parent entity references (polymorphic)
+  companyId       String?  @map("company_id")
+  inquiryId       String?  @map("inquiry_id")
+  opportunityId   String?  @map("opportunity_id")
+  siteVisitId     String?  @map("site_visit_id")
+  quotationId     String?  @map("quotation_id")
+  purchaseOrderId String?  @map("purchase_order_id")
+  projectId       String?  @map("project_id")
+  invoiceId       String?  @map("invoice_id")
+  vendorId        String?  @map("vendor_id")
+  
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  company       Company?        @relation(fields: [companyId], references: [id])
+  inquiry       Inquiry?        @relation(fields: [inquiryId], references: [id])
+  opportunity   Opportunity?    @relation(fields: [opportunityId], references: [id])
+  siteVisit     SiteVisit?      @relation(fields: [siteVisitId], references: [id])
+  purchaseOrder PurchaseOrder?  @relation(fields: [purchaseOrderId], references: [id])
+  project       Project?        @relation(fields: [projectId], references: [id])
+  invoice       FinanceInvoice? @relation(fields: [invoiceId], references: [id])
+  vendor        Vendor?         @relation(fields: [vendorId], references: [id])
+
+  @@index([companyId])
+  @@index([projectId])
+  @@map("documents")
+}
+
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  type      String   // inquiry_new, assignment, follow_up_overdue, quotation_approval, invoice_overdue, payment_received, etc.
+  title     String
+  message   String
+  entityType String? @map("entity_type")
+  entityId  String?  @map("entity_id")
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+// ============================================================
+// AUTOMATION
+// ============================================================
+
+model AutomationRule {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  triggerEntity String @map("trigger_entity") // quotation, opportunity, invoice, inquiry
+  triggerField  String @map("trigger_field")
+  triggerValue  String @map("trigger_value")
+  conditions    String? // JSON for additional conditions
+  actions       String  // JSON array of actions
+  isActive    Boolean @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  runs AutomationRun[]
+
+  @@map("automation_rules")
+}
+
+model AutomationRun {
+  id        String   @id @default(cuid())
+  ruleId    String   @map("rule_id")
+  entityId  String   @map("entity_id")
+  status    String   @default("success") // success, failed
+  result    String?  // JSON
+  error     String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  rule AutomationRule @relation(fields: [ruleId], references: [id])
+
+  @@index([ruleId])
+  @@map("automation_runs")
+}
+
+// ============================================================
+// AUDIT
+// ============================================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?  @map("user_id")
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  action     String   // create, update, delete, status_change, approval, etc.
+  before     String?  // JSON
+  after      String?  // JSON
+  reason     String?
+  ipAddress  String?  @map("ip_address")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================
+// AFTER-SALES
+// ============================================================
+
+model AfterSalesRequest {
+  id          String   @id @default(cuid())
+  companyId   String   @map("company_id")
+  projectId   String?  @map("project_id")
+  type        String   // warranty, maintenance, service_request, spare_parts
+  subject     String
+  description String?
+  priority    String   @default("medium")
+  status      String   @default("open") // open, in_progress, resolved, closed
+  assigneeId  String?  @map("assignee_id")
+  resolvedAt  DateTime? @map("resolved_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  company Company  @relation(fields: [companyId], references: [id])
+  project Project? @relation(fields: [projectId], references: [id])
+
+  @@index([companyId])
+  @@index([status])
+  @@map("after_sales_requests")
+}
+
+// ============================================================
+// APPROVAL CONFIGURATION
+// ============================================================
+
+model ApprovalRule {
+  id            String  @id @default(cuid())
+  name          String
+  entityType    String  @map("entity_type") // quotation, purchase_request
+  condition     String  // JSON: { field, operator, value }
+  approverId    String  @map("approver_id")
+  approverRole  String? @map("approver_role")
+  priority      Int     @default(0)
+  isActive      Boolean @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("approval_rules")
+}
